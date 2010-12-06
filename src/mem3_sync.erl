@@ -1,5 +1,5 @@
 % Copyright 2010 Cloudant
-% 
+%
 % Licensed under the Apache License, Version 2.0 (the "License"); you may not
 % use this file except in compliance with the License. You may obtain a copy of
 % the License at
@@ -132,6 +132,11 @@ handle_replication_exit(State, Pid) ->
     end,
     {noreply, NewState}.
 
+%% replication of shards
+start_push_replication(#shard{} = Shard, #shard{} = TargetShard) ->
+    mem3_rep:go(Shard,TargetShard);
+
+%% replication of databases
 start_push_replication(DbName, Node) ->
     PostBody = {[
         {<<"source">>, DbName},
@@ -203,7 +208,23 @@ initial_sync() ->
     Db2 = ?l2b(couch_config:get("mem3", "shard_db", "dbs")),
     Nodes = mem3:nodes(),
     Live = nodes(),
-    [[push(Db, N) || Db <- [Db1,Db2]] || N <- Nodes, lists:member(N, Live)].
+    ?LOG_INFO("initial sync of nodes and dbs ~n",[]),
+    %% shouldn't self be excluded from this list?
+    [[push(Db, N) || Db <- [Db1,Db2]] || N <- Nodes, lists:member(N, Live)],
+    %%
+    %% now handle shards -- from showroom sync
+    Self = node(),
+    {ok, AllDbs} = fabric:all_dbs(),
+    ?LOG_INFO("initial sync of shards for ~p dbs ~n",[length(AllDbs)]),
+    lists:foreach(fun(Db) ->
+        LocalShards = [S || #shard{node=N} = S <- mem3:shards(Db), N =:= Self],
+        lists:foreach(fun(#shard{name=ShardName} = LocalShard) ->
+            Targets = [S || #shard{node=N, name=Name} = S <- mem3:shards(Db),
+                N =/= Self, Name =:= ShardName],
+            [?MODULE:push(LocalShard,T) || #shard{node=N} = T <- Targets,
+                lists:member(N, Live)]
+        end, LocalShards)
+    end, AllDbs).
 
 start_update_notifier() ->
     Db1 = ?l2b(couch_config:get("mem3", "node_db", "nodes")),
@@ -212,7 +233,22 @@ start_update_notifier() ->
     ({updated, Db}) when Db == Db1; Db == Db2 ->
         Nodes = mem3:nodes(),
         Live = nodes(),
+        %% shouldn't self be excluded here?
         [?MODULE:push(Db, N) || N <- Nodes, lists:member(N, Live)];
+    ({updated, <<"shards/", _:18/binary, DbName/binary>> = ShardName}) ->
+        % TODO deal with split/merged partitions by comparing keyranges
+        Shards = mem3:shards(DbName),
+        [Source] = lists:foldl(fun(#shard{node=N, name=Name}=S,Acc) ->
+                                       if N =:= node() andalso Name =:= ShardName ->
+                                               [S];
+                                          true ->
+                                               Acc
+                                       end
+                               end,[],Shards),
+        Targets = [S || #shard{node=N, name=Name} = S <- Shards, N =/= node(),
+            Name =:= ShardName],
+        [?MODULE:push(Source,Shard) || #shard{node=N}=Shard <- Targets,
+            lists:member(N, nodes())];
     (_) -> ok end).
 
 %% @doc Finds the next {DbName,Node} pair in the list of waiting replications
