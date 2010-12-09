@@ -1,5 +1,5 @@
 % Copyright 2010 Cloudant
-% 
+%
 % Licensed under the Apache License, Version 2.0 (the "License"); you may not
 % use this file except in compliance with the License. You may obtain a copy of
 % the License at
@@ -63,7 +63,7 @@ code_change(_OldVsn, State, _Extra) ->
 %% internal functions
 
 listen_for_changes(Since) ->
-    DbName = ?l2b(couch_config:get("mem3", "db", "dbs")),
+    DbName = ?l2b(couch_config:get("mem3", "shard_db", "dbs")),
     {ok, Db} = ensure_exists(DbName),
     Args = #changes_args{
         feed = "continuous",
@@ -79,7 +79,7 @@ ensure_exists(DbName) ->
     case couch_db:open(DbName, Options) of
     {ok, Db} ->
         {ok, Db};
-    _ -> 
+    _ ->
         couch_server:create(DbName, Options)
     end.
 
