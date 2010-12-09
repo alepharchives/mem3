@@ -22,12 +22,16 @@ init(_) ->
     {ok, nil}.
 
 handle_event({add_node, Node}, State) ->
+    %% this guy has odd behavior if a node had been deleted from nodes,
+    %% the node brought down and then brought back up
+    %% io:format("a node was just added ~p ~n",[Node]),
     Db1 = list_to_binary(couch_config:get("mem3", "node_db", "nodes")),
     Db2 = list_to_binary(couch_config:get("mem3", "shard_db", "dbs")),
     [mem3_sync:push(Db, Node) || Db <- [Db1, Db2]],
     {ok, State};
 
 handle_event({nodeup, Node}, State) ->
+    io:format("a node just came up ~p ~n",[Node]),
     case lists:member(Node, mem3:nodes()) of
     true ->
         Db1 = list_to_binary(couch_config:get("mem3", "node_db", "nodes")),
@@ -39,6 +43,7 @@ handle_event({nodeup, Node}, State) ->
     {ok, State};
 
 handle_event({Down, Node}, State) when Down == nodedown; Down == remove_node ->
+    %%io:format("a node was : ~p ~p ~n",[Down,Node]),
     mem3_sync:remove_node(Node),
     {ok, State};
 
@@ -47,6 +52,7 @@ handle_event(_Event, State) ->
 
 handle_call(_Request, State) ->
     {ok, ok, State}.
+
 
 handle_info(_Info, State) ->
     {ok, State}.

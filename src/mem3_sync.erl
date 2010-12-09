@@ -41,7 +41,9 @@ get_queue() ->
     gen_server:call(?MODULE, get_queue).
 
 push(Db, Node) ->
-    gen_server:cast(?MODULE, {push, Db, Node}).
+    gen_server:cast(?MODULE,
+                    {push, #shard{name=Db,node=node()},
+                     #shard{name=Db,node=Node}}).
 
 remove_node(Node) ->
     gen_server:cast(?MODULE, {remove_node, Node}).
@@ -77,7 +79,16 @@ handle_cast({push, DbName, Node}, State) ->
 handle_cast({remove_node, Node}, State) ->
     Waiting = [{S,N} || {S,N} <- State#state.waiting, N =/= Node],
     Dict = lists:foldl(fun(DbName,D) -> dict:erase({DbName,Node}, D) end,
-        State#state.dict, [S || {S,N} <- Waiting, N =:= Node]),
+        State#state.dict, [S || {S,N} <- State#state.waiting, N =:= Node]),
+    {noreply, State#state{dict = Dict, waiting = Waiting}};
+
+handle_cast({remove_shard, Shard}, State) ->
+    Waiting = [{S,N} || {S,N} <- State#state.waiting, S =/= Shard],
+    Dict = lists:foldl(fun(Entry,D) ->
+                               ?LOG_INFO("removing shard ~p ~n",
+                                         [Entry]),
+                               dict:erase(Entry, D) end,
+        State#state.dict, [{S,N} || {S,N} <- State#state.waiting, S =:= Shard]),
     {noreply, State#state{dict = Dict, waiting = Waiting}}.
 
 handle_info({'EXIT', Pid, _}, #state{update_notifier=Pid} = State) ->
@@ -85,14 +96,16 @@ handle_info({'EXIT', Pid, _}, #state{update_notifier=Pid} = State) ->
     {noreply, State#state{update_notifier=NewPid}};
 
 handle_info({'EXIT', Active, normal}, State) ->
+    ?LOG_INFO("normal exit of replications ~p ~n",[Active]),
     handle_replication_exit(State, Active);
 
 handle_info({'EXIT', Active, Reason}, State) ->
     case lists:keyfind(Active, 3, State#state.active) of
     {OldDbName, OldNode, _} ->
-        ?LOG_ERROR("~p replication ~s -> ~p died:~n~p", [?MODULE, OldDbName,
-            OldNode, Reason]),
-        timer:apply_after(5000, ?MODULE, push, [OldDbName, OldNode]);
+        ?LOG_ERROR("~p replication ~p -> ~p died:~n~p", [?MODULE, OldDbName,
+            OldNode, Reason]);
+        %% this may have had a purpose but leads to loops now
+        %%timer:apply_after(5000, ?MODULE, push, [OldDbName, OldNode]);
     false -> ok end,
     handle_replication_exit(State, Active);
 
@@ -134,61 +147,12 @@ handle_replication_exit(State, Pid) ->
 
 %% replication of shards
 start_push_replication(#shard{} = Shard, #shard{} = TargetShard) ->
-    mem3_rep:go(Shard,TargetShard);
-
-%% replication of databases
-start_push_replication(DbName, Node) ->
-    PostBody = {[
-        {<<"source">>, DbName},
-        {<<"target">>, {[{<<"node">>, Node}, {<<"name">>, DbName}]}},
-        {<<"continuous">>, false},
-        {<<"async">>, true},
-        {<<"use_hostname">>, true}
-    ]},
-    ?LOG_INFO("starting ~s -> ~p internal replication", [DbName, Node]),
-    UserCtx = #user_ctx{name = <<"replicator">>, roles = [<<"_admin">>]},
-    case (catch couch_rep:replicate(PostBody, UserCtx)) of
-    Pid when is_pid(Pid) ->
-        link(Pid),
-        Pid;
-    {db_not_found, _Msg} ->
-        case couch_db:open(DbName, []) of
-        {ok, Db} ->
-            % source exists, let's (re)create the target
-            couch_db:close(Db),
-            case rpc:call(Node, couch_api, create_db, [DbName, []]) of
-            {ok, Target} ->
-                ?LOG_INFO("~p successfully created ~s on ~p", [?MODULE, DbName,
-                    Node]),
-                couch_db:close(Target),
-                start_push_replication(DbName, Node);
-            file_exists ->
-                start_push_replication(DbName, Node);
-            Error ->
-                ?LOG_ERROR("~p couldn't create ~s on ~p because ~p",
-                    [?MODULE, DbName, Node, Error]),
-                exit(shutdown)
-            end;
-        {not_found, no_db_file} ->
-            % source is gone, so this is a hack to skip it
-            ?LOG_INFO("~p tried to push ~s to ~p but it was already deleted",
-                [?MODULE, DbName, Node]),
-            spawn_link(fun() -> ok end)
-        end;
-    {node_not_connected, _} ->
-        % we'll get this one when the node rejoins
-        ?LOG_ERROR("~p exiting because ~p is not connected", [?MODULE, Node]),
-        spawn_link(fun() -> ok end);
-    CatchAll ->
-        ?LOG_INFO("~p strange error ~p", [?MODULE, CatchAll]),
-        case lists:member(Node, nodes()) of
-        true ->
-            timer:apply_after(5000, ?MODULE, push, [DbName, Node]);
-        false ->
-            ok
-        end,
-        spawn_link(fun() -> ok end)
-    end.
+    Pid =
+        spawn(fun() ->
+                      mem3_rep:go(Shard,TargetShard)
+              end),
+    link(Pid),
+    Pid.
 
 add_to_queue(State, DbName, Node) ->
     #state{dict=D, waiting=Waiting} = State,
@@ -196,7 +160,7 @@ add_to_queue(State, DbName, Node) ->
     true ->
         State;
     false ->
-        ?LOG_DEBUG("adding ~s -> ~p to internal queue", [DbName, Node]),
+        ?LOG_DEBUG("adding ~p -> ~p to internal queue", [DbName, Node]),
         State#state{
             dict = dict:store({DbName,Node}, ok, D),
             waiting = Waiting ++ [{DbName,Node}]
@@ -207,21 +171,19 @@ initial_sync() ->
     Db1 = ?l2b(couch_config:get("mem3", "node_db", "nodes")),
     Db2 = ?l2b(couch_config:get("mem3", "shard_db", "dbs")),
     Nodes = mem3:nodes(),
-    Live = nodes(),
-    ?LOG_INFO("initial sync of nodes and dbs ~n",[]),
-    %% shouldn't self be excluded from this list?
-    [[push(Db, N) || Db <- [Db1,Db2]] || N <- Nodes, lists:member(N, Live)],
-    %%
-    %% now handle shards -- from showroom sync
     Self = node(),
+    Live = nodes(),
+
+    [[push(Db,N)
+      || Db <- [Db1,Db2]] || N <- Nodes, lists:member(N, Live)],
+
     {ok, AllDbs} = fabric:all_dbs(),
-    ?LOG_INFO("initial sync of shards for ~p dbs ~n",[length(AllDbs)]),
     lists:foreach(fun(Db) ->
         LocalShards = [S || #shard{node=N} = S <- mem3:shards(Db), N =:= Self],
-        lists:foreach(fun(#shard{name=ShardName} = LocalShard) ->
+        lists:foreach(fun(#shard{name=ShardName}) ->
             Targets = [S || #shard{node=N, name=Name} = S <- mem3:shards(Db),
                 N =/= Self, Name =:= ShardName],
-            [?MODULE:push(LocalShard,T) || #shard{node=N} = T <- Targets,
+            [?MODULE:push(ShardName,N) || #shard{node=N} <- Targets,
                 lists:member(N, Live)]
         end, LocalShards)
     end, AllDbs).
@@ -233,22 +195,16 @@ start_update_notifier() ->
     ({updated, Db}) when Db == Db1; Db == Db2 ->
         Nodes = mem3:nodes(),
         Live = nodes(),
-        %% shouldn't self be excluded here?
-        [?MODULE:push(Db, N) || N <- Nodes, lists:member(N, Live)];
+        [?MODULE:push(Db,N) || N <- Nodes, lists:member(N, Live)];
     ({updated, <<"shards/", _:18/binary, DbName/binary>> = ShardName}) ->
         % TODO deal with split/merged partitions by comparing keyranges
         Shards = mem3:shards(DbName),
-        [Source] = lists:foldl(fun(#shard{node=N, name=Name}=S,Acc) ->
-                                       if N =:= node() andalso Name =:= ShardName ->
-                                               [S];
-                                          true ->
-                                               Acc
-                                       end
-                               end,[],Shards),
         Targets = [S || #shard{node=N, name=Name} = S <- Shards, N =/= node(),
             Name =:= ShardName],
-        [?MODULE:push(Source,Shard) || #shard{node=N}=Shard <- Targets,
+        [?MODULE:push(ShardName,N) || #shard{node=N} <- Targets,
             lists:member(N, nodes())];
+    ({deleted, <<"shards/", _:18/binary, _/binary>> = ShardName}) ->
+        gen_server:cast(?MODULE, {remove_shard, ShardName});
     (_) -> ok end).
 
 %% @doc Finds the next {DbName,Node} pair in the list of waiting replications
