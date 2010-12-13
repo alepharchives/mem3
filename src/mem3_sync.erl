@@ -50,7 +50,7 @@ remove_node(Node) ->
 
 init([]) ->
     process_flag(trap_exit, true),
-    Concurrency = couch_config:get("mem3", "sync_concurrency", "10"),
+    Concurrency = couch_config:get("mem3", "sync_concurrency", "2"),
     gen_event:add_handler(mem3_events, mem3_sync_event, []),
     {ok, Pid} = start_update_notifier(),
     spawn(fun initial_sync/0),
@@ -85,10 +85,9 @@ handle_cast({remove_node, Node}, State) ->
 handle_cast({remove_shard, Shard}, State) ->
     Waiting = [{S,N} || {S,N} <- State#state.waiting, S =/= Shard],
     Dict = lists:foldl(fun(Entry,D) ->
-                               ?LOG_INFO("removing shard ~p ~n",
-                                         [Entry]),
                                dict:erase(Entry, D) end,
         State#state.dict, [{S,N} || {S,N} <- State#state.waiting, S =:= Shard]),
+    [exit(Pid, shutdown) || {S,_,Pid} <- State#state.active, S =:= Shard],
     {noreply, State#state{dict = Dict, waiting = Waiting}}.
 
 handle_info({'EXIT', Pid, _}, #state{update_notifier=Pid} = State) ->
@@ -104,8 +103,7 @@ handle_info({'EXIT', Active, Reason}, State) ->
     {OldDbName, OldNode, _} ->
         ?LOG_ERROR("~p replication ~p -> ~p died:~n~p", [?MODULE, OldDbName,
             OldNode, Reason]);
-        %% this may have had a purpose but leads to loops now
-        %%timer:apply_after(5000, ?MODULE, push, [OldDbName, OldNode]);
+        %timer:apply_after(5000, ?MODULE, push, [OldDbName, OldNode]);
     false -> ok end,
     handle_replication_exit(State, Active);
 
@@ -146,11 +144,26 @@ handle_replication_exit(State, Pid) ->
     {noreply, NewState}.
 
 %% replication of shards
-start_push_replication(#shard{} = Shard, #shard{} = TargetShard) ->
+start_push_replication(#shard{name=SourceName} = Shard,
+                       #shard{node=Node, name=TargetName} = TargetShard) ->
     Pid =
-        spawn(fun() ->
-                      mem3_rep:go(Shard,TargetShard)
-              end),
+      spawn(fun() ->
+             case catch mem3_rep:go(Shard,TargetShard) of
+                 {not_found, no_db_file} ->
+                     case rpc:call(Node, couch_db, create, [TargetName, []]) of
+                         {ok, _Target} ->
+                             sync_nodes_and_dbs(),
+                             ?MODULE:push(SourceName, Node);
+                         file_exists ->
+                             ?MODULE:push(SourceName, Node);
+                         Error ->
+                             ?LOG_ERROR("~p couldn't create ~s on ~p because ~p",
+                                        [?MODULE, TargetName, Node, Error]),
+                             exit(shutdown)
+                     end;
+                 _Else  -> ok
+
+             end end),
     link(Pid),
     Pid.
 
@@ -167,16 +180,21 @@ add_to_queue(State, DbName, Node) ->
         }
     end.
 
-initial_sync() ->
+sync_nodes_and_dbs() ->
     Db1 = ?l2b(couch_config:get("mem3", "node_db", "nodes")),
     Db2 = ?l2b(couch_config:get("mem3", "shard_db", "dbs")),
     Nodes = mem3:nodes(),
-    Self = node(),
     Live = nodes(),
-
     [[push(Db,N)
-      || Db <- [Db1,Db2]] || N <- Nodes, lists:member(N, Live)],
+      || Db <- [Db1,Db2]] || N <- Nodes, lists:member(N, Live)].
 
+initial_sync() ->
+    sync_nodes_and_dbs(),
+    Live = nodes(),
+    initial_sync([Live]).
+
+initial_sync(Live) ->
+    Self = node(),
     {ok, AllDbs} = fabric:all_dbs(),
     lists:foreach(fun(Db) ->
         LocalShards = [S || #shard{node=N} = S <- mem3:shards(Db), N =:= Self],
@@ -187,6 +205,7 @@ initial_sync() ->
                 lists:member(N, Live)]
         end, LocalShards)
     end, AllDbs).
+
 
 start_update_notifier() ->
     Db1 = ?l2b(couch_config:get("mem3", "node_db", "nodes")),

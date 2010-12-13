@@ -1,5 +1,5 @@
 % Copyright 2010 Cloudant
-% 
+%
 % Licensed under the Apache License, Version 2.0 (the "License"); you may not
 % use this file except in compliance with the License. You may obtain a copy of
 % the License at
@@ -16,7 +16,8 @@
 
 -export([hash/1, name_shard/1, create_partition_map/4, build_shards/2,
     n_val/2, to_atom/1, to_integer/1, write_db_doc/1, delete_db_doc/1,
-    load_shards_from_disk/1, load_shards_from_disk/2, shard_info/1]).
+    ensure_exists/1, load_shards_from_disk/1, load_shards_from_disk/2,
+    shard_info/1]).
 
 -define(RINGTOP, 2 bsl 31).  % CRC32 space
 
@@ -155,3 +156,14 @@ load_shards_from_disk(DbName, DocId)->
 shard_info(DbName) ->
     [{n, mem3:n(DbName)},
      {q, length(mem3:shards(DbName)) div mem3:n(DbName)}].
+
+ensure_exists(DbName) when is_list(DbName) ->
+    ensure_exists(list_to_binary(DbName));
+ensure_exists(DbName) ->
+    Options = [{user_ctx, #user_ctx{roles=[<<"_admin">>]}}],
+    case couch_db:open(DbName, Options) of
+    {ok, Db} ->
+        {ok, Db};
+    _ ->
+        couch_server:create(DbName, Options)
+    end.

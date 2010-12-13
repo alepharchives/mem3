@@ -9,8 +9,7 @@
 
 -record(acc, {revcount = 0, infos = [], seq, localid, source, target}).
 
-go(#shard{node=NodS,name=NS} = Source, #shard{node=NodT,name=NT} = Target) ->
-    ?LOG_INFO("starting ~s on ~p -> ~s on ~p internal replication", [NS,NodS,NT,NodT]),
+go(#shard{} = Source, #shard{} = Target) ->
     LocalId = make_local_id(Source, Target),
     {ok, Db} = couch_db:open(Source#shard.name, [{user_ctx,?CTX}]),
     try go(Db, Target, LocalId) after couch_db:close(Db) end.
@@ -80,7 +79,7 @@ rexi_call(Node, MFA) ->
     receive {Ref, {ok, Reply}} ->
         Reply;
     {Ref, Error} ->
-        erlang:error(Error)
+        throw(Error)
     after 60000 ->
         erlang:error(timeout)
     end.
