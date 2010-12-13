@@ -17,7 +17,8 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
     code_change/3]).
 
--export([start_link/0, get_active/0, get_queue/0, push/2, remove_node/1]).
+-export([start_link/0, get_active/0, get_queue/0, push/2, remove_node/1,
+         initial_sync/1]).
 
 -include("mem3.hrl").
 -include_lib("couch/include/couch_db.hrl").
@@ -191,7 +192,7 @@ sync_nodes_and_dbs() ->
 initial_sync() ->
     sync_nodes_and_dbs(),
     Live = nodes(),
-    initial_sync([Live]).
+    initial_sync(Live).
 
 initial_sync(Live) ->
     Self = node(),
