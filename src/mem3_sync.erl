@@ -103,8 +103,8 @@ handle_info({'EXIT', Active, Reason}, State) ->
     case lists:keyfind(Active, 3, State#state.active) of
     {OldDbName, OldNode, _} ->
         ?LOG_ERROR("~p replication ~p -> ~p died:~n~p", [?MODULE, OldDbName,
-            OldNode, Reason]);
-        %timer:apply_after(5000, ?MODULE, push, [OldDbName, OldNode]);
+            OldNode, Reason]),
+    timer:apply_after(5000, ?MODULE, push, [OldDbName, OldNode]);
     false -> ok end,
     handle_replication_exit(State, Active);
 
@@ -148,7 +148,7 @@ handle_replication_exit(State, Pid) ->
 start_push_replication(#shard{name=SourceName} = Shard,
                        #shard{node=Node, name=TargetName} = TargetShard) ->
     Pid =
-      spawn(fun() ->
+      spawn_link(fun() ->
              case catch mem3_rep:go(Shard,TargetShard) of
                  {not_found, no_db_file} ->
                      case rpc:call(Node, couch_db, create, [TargetName, []]) of
@@ -165,7 +165,6 @@ start_push_replication(#shard{name=SourceName} = Shard,
                  _Else  -> ok
 
              end end),
-    link(Pid),
     Pid.
 
 add_to_queue(State, DbName, Node) ->
