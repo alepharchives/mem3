@@ -19,13 +19,17 @@
     code_change/3]).
 
 init(_) ->
-    net_kernel:monitor(true),
+    net_kernel:monitor_nodes(true),
     {ok, nil}.
 
 handle_event({add_node, Node}, State) ->
     Db1 = list_to_binary(couch_config:get("mem3", "node_db", "nodes")),
     Db2 = list_to_binary(couch_config:get("mem3", "shard_db", "dbs")),
     [mem3_sync:push(Db, Node) || Db <- [Db1, Db2]],
+    {ok, State};
+
+handle_event({remove_node, Node}, State)  ->
+    mem3_sync:remove_node(Node),
     {ok, State};
 
 handle_event(_Event, State) ->
@@ -46,7 +50,7 @@ handle_info({nodeup, Node}, State) ->
     mem3_sync:initial_sync([Node]),
     {ok, State};
 
-handle_info({Down, Node}, State) when Down == nodedown; Down == remove_node ->
+handle_info({nodedown, Node}, State) ->
     mem3_sync:remove_node(Node),
     {ok, State};
 
