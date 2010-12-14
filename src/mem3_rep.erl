@@ -11,8 +11,11 @@
 
 go(#shard{} = Source, #shard{} = Target) ->
     LocalId = make_local_id(Source, Target),
-    {ok, Db} = couch_db:open(Source#shard.name, [{user_ctx,?CTX}]),
-    try go(Db, Target, LocalId) after couch_db:close(Db) end.
+    case couch_db:open(Source#shard.name, [{user_ctx,?CTX}]) of
+        {ok, Db} ->
+            try go(Db, Target, LocalId) after couch_db:close(Db) end;
+        Else -> Else
+    end.
 
 go(#db{} = Db, #shard{} = Target, LocalId) ->
     Seq = calculate_start_seq(Db, Target, LocalId),

@@ -147,9 +147,9 @@ handle_replication_exit(State, Pid) ->
 %% replication of shards
 start_push_replication(#shard{name=SourceName} = Shard,
                        #shard{node=Node, name=TargetName} = TargetShard) ->
-    Pid =
-      spawn_link(fun() ->
+    spawn_link(fun() ->
              case catch mem3_rep:go(Shard,TargetShard) of
+                 %% mem3_rep:go will check source exist, so not_found will refer to target
                  {not_found, no_db_file} ->
                      case rpc:call(Node, couch_db, create, [TargetName, []]) of
                          {ok, _Target} ->
@@ -164,8 +164,7 @@ start_push_replication(#shard{name=SourceName} = Shard,
                      end;
                  _Else  -> ok
 
-             end end),
-    Pid.
+             end end).
 
 add_to_queue(State, DbName, Node) ->
     #state{dict=D, waiting=Waiting} = State,
