@@ -107,7 +107,8 @@ shards(DbName, DocId) ->
 choose_shards(DbName, Options) when is_list(DbName) ->
     choose_shards(list_to_binary(DbName), Options);
 choose_shards(DbName, Options) ->
-    try shards(DbName)
+    try shards(DbName) of
+        _ -> database_already_exists
     catch error:E when E==database_does_not_exist; E==badarg ->
         Nodes = mem3:nodes(),
         NodeCount = length(Nodes),
