@@ -14,7 +14,7 @@
 
 -module(mem3_util).
 
--export([hash/1, name_shard/1, create_partition_map/4, build_shards/2,
+-export([hash/1, name_shard/2, create_partition_map/5, build_shards/2,
     n_val/2, to_atom/1, to_integer/1, write_db_doc/1, delete_db_doc/1,
     ensure_exists/1, load_shards_from_disk/1, load_shards_from_disk/2,
     shard_info/1]).
@@ -29,16 +29,16 @@ hash(Item) when is_binary(Item) ->
 hash(Item) ->
     erlang:crc32(term_to_binary(Item)).
 
-name_shard(#shard{dbname = DbName, range=[B,E]} = Shard) ->
+name_shard(#shard{dbname = DbName, range=[B,E]} = Shard, Suffix) ->
     Name = ["shards/", couch_util:to_hex(<<B:32/integer>>), "-",
-        couch_util:to_hex(<<E:32/integer>>), "/", DbName],
+        couch_util:to_hex(<<E:32/integer>>), "/", DbName, Suffix],
     Shard#shard{name = ?l2b(Name)}.
 
-create_partition_map(DbName, N, Q, Nodes) ->
+create_partition_map(DbName, N, Q, Nodes, Suffix) ->
     UniqueShards = make_key_ranges((?RINGTOP) div Q, 0, []),
     Shards0 = lists:flatten([lists:duplicate(N, S) || S <- UniqueShards]),
     Shards1 = attach_nodes(Shards0, [], Nodes, []),
-    [name_shard(S#shard{dbname=DbName}) || S <- Shards1].
+    [name_shard(S#shard{dbname=DbName},Suffix) || S <- Shards1].
 
 make_key_ranges(_, CurrentPos, Acc) when CurrentPos >= ?RINGTOP ->
     Acc;
@@ -93,11 +93,16 @@ delete_db_doc(Db, DocId) ->
     {not_found, _} ->
         ok;
     {ok, OldDoc} ->
-        {ok, _} = couch_db:update_doc(Db, OldDoc#doc{deleted=true}, [])
+        %% not really deleted the db doc, just marking it deleted
+        #doc{body={PropList}} = OldDoc,
+        NewBody = proplists:delete(<<"deleted">>,PropList) ++
+                [{<<"deleted">>,true}],
+        {ok, _} = couch_db:update_doc(Db, OldDoc#doc{body={NewBody}}, [])
     end.
 
 build_shards(DbName, DocProps) ->
     {ByNode} = couch_util:get_value(<<"by_node">>, DocProps, {[]}),
+    Suffix = couch_util:get_value(<<"shard_suffix">>, DocProps, ""),
     lists:flatmap(fun({Node, Ranges}) ->
         lists:map(fun(Range) ->
             [B,E] = string:tokens(?b2l(Range), "-"),
@@ -107,7 +112,7 @@ build_shards(DbName, DocProps) ->
                 dbname = DbName,
                 node = to_atom(Node),
                 range = [Beg, End]
-            })
+            }, Suffix)
         end, Ranges)
     end, ByNode).
 
@@ -143,7 +148,13 @@ load_shards_from_db(#db{} = ShardDb, DbName) ->
     case couch_db:open_doc(ShardDb, DbName, []) of
     {ok, #doc{body = {Props}}} ->
         ?LOG_INFO("dbs cache miss for ~s", [DbName]),
-        build_shards(DbName, Props);
+        case couch_util:get_value(<<"deleted">>,Props) of
+            true ->
+                %% need to pretend it really doesn't exist
+                erlang:error(database_does_not_exist);
+            false ->
+                build_shards(DbName, Props)
+        end;
     {not_found, _} ->
         erlang:error(database_does_not_exist)
     end.

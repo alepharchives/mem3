@@ -1,5 +1,5 @@
 % Copyright 2010 Cloudant
-% 
+%
 % Licensed under the Apache License, Version 2.0 (the "License"); you may not
 % use this file except in compliance with the License. You may obtain a copy of
 % the License at
@@ -27,24 +27,24 @@ hash_test() ->
 
 name_shard_test() ->
     Shard1 = #shard{},
-    ?assertError(function_clause, mem3_util:name_shard(Shard1)),
+    ?assertError(function_clause, mem3_util:name_shard(Shard1,"")),
 
     Shard2 = #shard{dbname = <<"testdb">>, range = [0,100]},
-    #shard{name=Name2} = mem3_util:name_shard(Shard2),
+    #shard{name=Name2} = mem3_util:name_shard(Shard2,""),
     ?assertEqual(<<"shards/00000000-00000064/testdb">>, Name2),
 
     ok.
 
 create_partition_map_test() ->
     {DbName1, N1, Q1, Nodes1} = {<<"testdb1">>, 3, 4, [a,b,c,d]},
-    Map1 = mem3_util:create_partition_map(DbName1, N1, Q1, Nodes1),
+    Map1 = mem3_util:create_partition_map(DbName1, N1, Q1, Nodes1,"foo"),
     ?assertEqual(12, length(Map1)),
 
     {DbName2, N2, Q2, Nodes2} = {<<"testdb2">>, 1, 1, [a,b,c,d]},
     [#shard{name=Name2,node=Node2}] = Map2 =
-        mem3_util:create_partition_map(DbName2, N2, Q2, Nodes2),
+        mem3_util:create_partition_map(DbName2, N2, Q2, Nodes2,"foo"),
     ?assertEqual(1, length(Map2)),
-    ?assertEqual(<<"shards/00000000-ffffffff/testdb2">>, Name2),
+    ?assertEqual(<<"shards/00000000-ffffffff/testdb2foo">>, Name2),
     ?assertEqual(a, Node2),
     ok.
 
