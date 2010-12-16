@@ -107,8 +107,8 @@ shards(DbName, DocId) ->
 choose_shards(DbName, Options) when is_list(DbName) ->
     choose_shards(list_to_binary(DbName), Options);
 choose_shards(DbName, Options) ->
-    try shards(DbName) of
-        _ -> database_already_exists
+    try
+        {existing, shards(DbName)}
     catch error:E when E==database_does_not_exist; E==badarg ->
         Nodes = mem3:nodes(),
         NodeCount = length(Nodes),
@@ -119,7 +119,7 @@ choose_shards(DbName, Options) ->
         % rotate to a random entry in the nodelist for even distribution
         {A, B} = lists:split(crypto:rand_uniform(1,length(Nodes)+1), Nodes),
         RotatedNodes = B ++ A,
-        mem3_util:create_partition_map(DbName, N, Q, RotatedNodes, Suffix)
+        {new, mem3_util:create_partition_map(DbName, N, Q, RotatedNodes, Suffix)}
     end.
 
 -spec dbname(#shard{} | iodata()) -> binary().
