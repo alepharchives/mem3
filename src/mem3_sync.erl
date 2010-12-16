@@ -96,7 +96,7 @@ handle_info({'EXIT', Pid, _}, #state{update_notifier=Pid} = State) ->
     {noreply, State#state{update_notifier=NewPid}};
 
 handle_info({'EXIT', Active, normal}, State) ->
-    ?LOG_INFO("normal exit of replications ~p ~n",[Active]),
+    %%?LOG_INFO("normal exit of replications ~p ~n",[Active]),
     handle_replication_exit(State, Active);
 
 handle_info({'EXIT', Active, Reason}, State) ->
@@ -145,26 +145,10 @@ handle_replication_exit(State, Pid) ->
     {noreply, NewState}.
 
 %% replication of shards
-start_push_replication(#shard{name=SourceName} = Shard,
-                       #shard{node=Node, name=TargetName} = TargetShard) ->
+start_push_replication(#shard{} = Shard,
+                       #shard{} = TargetShard) ->
     spawn_link(fun() ->
-             case catch mem3_rep:go(Shard,TargetShard) of
-                 %% mem3_rep:go will check source exist, so not_found will refer to target
-                 {not_found, no_db_file} ->
-                     case rpc:call(Node, couch_db, create, [TargetName, []]) of
-                         {ok, _Target} ->
-                             sync_nodes_and_dbs(),
-                             ?MODULE:push(SourceName, Node);
-                         file_exists ->
-                             ?MODULE:push(SourceName, Node);
-                         Error ->
-                             ?LOG_ERROR("~p couldn't create ~s on ~p because ~p",
-                                        [?MODULE, TargetName, Node, Error]),
-                             exit(shutdown)
-                     end;
-                 _Else  -> ok
-
-             end end).
+             catch mem3_rep:go(Shard,TargetShard) end).
 
 add_to_queue(State, DbName, Node) ->
     #state{dict=D, waiting=Waiting} = State,
@@ -214,9 +198,9 @@ start_update_notifier() ->
         Nodes = mem3:nodes(),
         Live = nodes(),
         [?MODULE:push(Db,N) || N <- Nodes, lists:member(N, Live)];
-    ({updated, <<"shards/", _:18/binary, DbName/binary>> = ShardName}) ->
+    ({updated, <<"shards/", _/binary>> = ShardName}) ->
         % TODO deal with split/merged partitions by comparing keyranges
-        Shards = mem3:shards(DbName),
+        Shards = mem3:shards(mem3:dbname(ShardName)),
         Targets = [S || #shard{node=N, name=Name} = S <- Shards, N =/= node(),
             Name =:= ShardName],
         [?MODULE:push(ShardName,N) || #shard{node=N} <- Targets,

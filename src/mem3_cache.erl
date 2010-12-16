@@ -81,18 +81,20 @@ changes_callback({stop, EndSeq}, _) ->
 changes_callback({change, {Change}, _}, _) ->
     DbName = couch_util:get_value(<<"id">>, Change),
     case DbName of <<"_design/", _/binary>> -> ok; _Else ->
-        case couch_util:get_value(deleted, Change, false) of
-        true ->
-            ets:delete(partitions, DbName);
-        false ->
             case couch_util:get_value(doc, Change) of
             {error, Reason} ->
                 ?LOG_ERROR("missing partition table for ~s: ~p", [DbName, Reason]);
+            %% change of interests are always updates, dbs never deleted
             {Doc} ->
-                ets:delete(partitions, DbName),
-                ets:insert(partitions, mem3_util:build_shards(DbName, Doc))
+                    ets:delete(partitions, DbName),
+                    case couch_util:get_value(<<"deleted">>,Doc) of
+                        true -> ok;
+                        false ->
+                            %% TODO: check that shards exist and if not create
+                            ?LOG_INFO("loading db ~p into partitions ~n", [DbName]),
+                            ets:insert(partitions, mem3_util:build_shards(DbName, Doc))
+                    end
             end
-        end
     end,
     {ok, couch_util:get_value(<<"seq">>, Change)};
 changes_callback(timeout, _) ->
