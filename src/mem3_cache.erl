@@ -81,6 +81,7 @@ changes_callback({stop, EndSeq}, _) ->
 changes_callback({change, {Change}, _}, _) ->
     DbName = couch_util:get_value(<<"id">>, Change),
     case DbName of <<"_design/", _/binary>> -> ok; _Else ->
+            DbDir = couch_config:get("couchdb","database_dir"),
             case couch_util:get_value(deleted, Change, false) of
                 true ->
                     ?LOG_INFO("deleting db ~p from partitions ~n", [DbName]),
@@ -93,13 +94,23 @@ changes_callback({change, {Change}, _}, _) ->
                         {Doc} ->
                             ets:delete(partitions, DbName),
                             ?LOG_INFO("loading db ~p into partitions ~n", [DbName]),
-                            ets:insert(partitions, mem3_util:build_shards(DbName, Doc))
-                            %% this code does the trick of creating shard when needed
-                            %% but adds considerbale overhead
-                            %%
-                            %% lists:map(fun(#shard{name=ShardName}) ->
-                            %%                   mem3_util:ensure_exists(ShardName)
-                            %%           end,mem3:shards(DbName))
+                            Shards = mem3_util:build_shards(DbName, Doc),
+                            ets:insert(partitions, Shards),
+                            %% check, if a shard exists, assume they all do? if
+                            %% it doesn't assume they all don't
+                            FirstShard = hd(Shards),
+                            FirstShardName = FirstShard#shard.name,
+                            FileToCheck = DbDir ++ "/" ++ ?b2l(FirstShardName) ++ ".couch",
+                            case file:read_file_info(FileToCheck) of
+                                {error, enoent} ->
+                                    %?LOG_INFO("Ok, have to create shards for ~p ~n",
+                                    % [DbName]),
+                                    lists:map(fun(#shard{name=ShardName}) ->
+                                               mem3_util:ensure_exists(ShardName)
+                                              end,Shards);
+                                {ok, _} ->
+                                    ok
+                            end
                     end
             end
     end,
