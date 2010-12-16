@@ -81,18 +81,25 @@ changes_callback({stop, EndSeq}, _) ->
 changes_callback({change, {Change}, _}, _) ->
     DbName = couch_util:get_value(<<"id">>, Change),
     case DbName of <<"_design/", _/binary>> -> ok; _Else ->
-            case couch_util:get_value(doc, Change) of
-            {error, Reason} ->
-                ?LOG_ERROR("missing partition table for ~s: ~p", [DbName, Reason]);
-            %% change of interests are always updates, dbs never deleted
-            {Doc} ->
-                    ets:delete(partitions, DbName),
-                    case couch_util:get_value(<<"deleted">>,Doc) of
-                        true -> ok;
-                        false ->
-                            %% TODO: check that shards exist and if not create
+            case couch_util:get_value(deleted, Change, false) of
+                true ->
+                    ?LOG_INFO("deleting db ~p from partitions ~n", [DbName]),
+                    ets:delete(partitions, DbName);
+                false ->
+                    case couch_util:get_value(doc, Change) of
+                        {error, Reason} ->
+                            ?LOG_ERROR("missing partition table for ~s: ~p",
+                                       [DbName, Reason]);
+                        {Doc} ->
+                            ets:delete(partitions, DbName),
                             ?LOG_INFO("loading db ~p into partitions ~n", [DbName]),
                             ets:insert(partitions, mem3_util:build_shards(DbName, Doc))
+                            %% this code does the trick of creating shard when needed
+                            %% but adds considerbale overhead
+                            %%
+                            %% lists:map(fun(#shard{name=ShardName}) ->
+                            %%                   mem3_util:ensure_exists(ShardName)
+                            %%           end,mem3:shards(DbName))
                     end
             end
     end,

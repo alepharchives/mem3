@@ -15,9 +15,9 @@
 -module(mem3_util).
 
 -export([hash/1, name_shard/2, create_partition_map/5, build_shards/2,
-    n_val/2, to_atom/1, to_integer/1, write_db_doc/1, delete_db_doc/1,
-    ensure_exists/1, load_shards_from_disk/1, load_shards_from_disk/2,
-    shard_info/1]).
+    n_val/2, to_atom/1, to_integer/1, open_db_doc/1,
+    write_db_doc/1, delete_db_doc/1, ensure_exists/1, load_shards_from_disk/1,
+    load_shards_from_disk/2, shard_info/1]).
 
 -define(RINGTOP, 2 bsl 31).  % CRC32 space
 
@@ -58,6 +58,11 @@ attach_nodes(Shards, Acc, [], UsedNodes) ->
 attach_nodes([S | Rest], Acc, [Node | Nodes], UsedNodes) ->
     attach_nodes(Rest, [S#shard{node=Node} | Acc], Nodes, [Node | UsedNodes]).
 
+open_db_doc(DbName) ->
+    {ok, Db} = couch_db:open(<<"dbs">>, []),
+    {ok, Doc} = couch_db:open_doc(Db, DbName, []),
+    Doc.
+
 write_db_doc(Doc) ->
     {ok, Db} = couch_db:open(<<"dbs">>, []),
     try
@@ -93,11 +98,7 @@ delete_db_doc(Db, DocId) ->
     {not_found, _} ->
         ok;
     {ok, OldDoc} ->
-        %% not really deleted the db doc, just marking it deleted
-        #doc{body={PropList}} = OldDoc,
-        NewBody = proplists:delete(<<"deleted">>,PropList) ++
-                [{<<"deleted">>,true}],
-        {ok, _} = couch_db:update_doc(Db, OldDoc#doc{body={NewBody}}, [])
+        {ok, _} = couch_db:update_doc(Db, OldDoc#doc{deleted=true}, [])
     end.
 
 build_shards(DbName, DocProps) ->
@@ -144,17 +145,12 @@ load_shards_from_disk(DbName) when is_binary(DbName) ->
     {ok, Db} = couch_db:open(<<"dbs">>, []),
     try load_shards_from_db(Db, DbName) after couch_db:close(Db) end.
 
+
 load_shards_from_db(#db{} = ShardDb, DbName) ->
     case couch_db:open_doc(ShardDb, DbName, []) of
     {ok, #doc{body = {Props}}} ->
         ?LOG_INFO("dbs cache miss for ~s", [DbName]),
-        case couch_util:get_value(<<"deleted">>,Props) of
-            true ->
-                %% need to pretend it really doesn't exist
-                erlang:error(database_does_not_exist);
-            false ->
-                build_shards(DbName, Props)
-        end;
+        build_shards(DbName, Props);
     {not_found, _} ->
         erlang:error(database_does_not_exist)
     end.
