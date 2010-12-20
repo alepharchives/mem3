@@ -84,7 +84,6 @@ changes_callback({change, {Change}, _}, _) ->
             DbDir = couch_config:get("couchdb","database_dir"),
             case couch_util:get_value(deleted, Change, false) of
                 true ->
-                    ?LOG_INFO("deleting db ~p from partitions ~n", [DbName]),
                     ets:delete(partitions, DbName);
                 false ->
                     case couch_util:get_value(doc, Change) of
@@ -93,24 +92,19 @@ changes_callback({change, {Change}, _}, _) ->
                                        [DbName, Reason]);
                         {Doc} ->
                             ets:delete(partitions, DbName),
-                            ?LOG_INFO("loading db ~p into partitions ~n", [DbName]),
                             Shards = mem3_util:build_shards(DbName, Doc),
                             ets:insert(partitions, Shards),
-                            %% check, if a shard exists, assume they all do? if
-                            %% it doesn't assume they all don't
-                            FirstShard = hd(Shards),
-                            FirstShardName = FirstShard#shard.name,
-                            FileToCheck = DbDir ++ "/" ++ ?b2l(FirstShardName) ++ ".couch",
-                            case file:read_file_info(FileToCheck) of
-                                {error, enoent} ->
-                                    %?LOG_INFO("Ok, have to create shards for ~p ~n",
-                                    % [DbName]),
-                                    lists:map(fun(#shard{name=ShardName}) ->
-                                               mem3_util:ensure_exists(ShardName)
-                                              end,Shards);
-                                {ok, _} ->
-                                    ok
-                            end
+                            %% check, if a shard exists before calling ensure to
+                            %% avoid opeing db
+                            lists:map(fun(#shard{name=ShardName}) ->
+                                              FileToCheck = DbDir ++ "/" ++ ?b2l(ShardName)
+                                                  ++ ".couch",
+                                              case file:read_file_info(FileToCheck) of
+                                                  {error, enoent} ->
+                                                      mem3_util:ensure_exists(ShardName);
+                                                  {ok, _} ->
+                                                      ok
+                                              end end,Shards)
                     end
             end
     end,
