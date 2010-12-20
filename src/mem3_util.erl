@@ -148,7 +148,6 @@ load_shards_from_disk(DbName) when is_binary(DbName) ->
 load_shards_from_db(#db{} = ShardDb, DbName) ->
     case couch_db:open_doc(ShardDb, DbName, []) of
     {ok, #doc{body = {Props}}} ->
-        ?LOG_INFO("dbs cache miss for ~s", [DbName]),
         build_shards(DbName, Props);
     {not_found, _} ->
         erlang:error(database_does_not_exist)
