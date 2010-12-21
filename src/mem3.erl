@@ -110,12 +110,13 @@ choose_shards(DbName, Options) ->
     try
         {existing, shards(DbName)}
     catch error:E when E==database_does_not_exist; E==badarg ->
+        {MegaSecs,Secs,_} = now(),
+        Suffix = "." ++ integer_to_list(MegaSecs*1000000 + Secs),
         Nodes = mem3:nodes(),
         NodeCount = length(Nodes),
         N = mem3_util:n_val(couch_util:get_value(n, Options), NodeCount),
         Q = mem3_util:to_integer(couch_util:get_value(q, Options,
             couch_config:get("cluster", "q", "8"))),
-        Suffix = couch_util:get_value(shard_suffix, Options),
         % rotate to a random entry in the nodelist for even distribution
         {A, B} = lists:split(crypto:rand_uniform(1,length(Nodes)+1), Nodes),
         RotatedNodes = B ++ A,
