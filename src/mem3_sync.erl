@@ -104,7 +104,18 @@ handle_info({'EXIT', Active, Reason}, State) ->
     {OldDbName, OldNode, _} ->
         ?LOG_ERROR("~p replication ~p -> ~p died:~n~p", [?MODULE, OldDbName,
             OldNode, Reason]),
-    timer:apply_after(5000, ?MODULE, push, [OldDbName, OldNode]);
+            if is_tuple(Reason) ->
+                    case element(1,Reason) of
+                        {not_found, no_db_file} -> ok;
+                        _Else ->
+                            #shard{name=Db} = OldDbName,
+                            #shard{node=Node} = OldNode,
+                            timer:apply_after(5000, ?MODULE, push, [Db, Node])
+                    end;
+               true ->
+                    %% shutdown or killed no retry
+                    ok
+            end;
     false -> ok end,
     handle_replication_exit(State, Active);
 
@@ -148,7 +159,7 @@ handle_replication_exit(State, Pid) ->
 start_push_replication(#shard{} = Shard,
                        #shard{} = TargetShard) ->
     spawn_link(fun() ->
-             catch mem3_rep:go(Shard,TargetShard) end).
+             mem3_rep:go(Shard,TargetShard) end).
 
 add_to_queue(State, DbName, Node) ->
     #state{dict=D, waiting=Waiting} = State,
