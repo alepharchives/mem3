@@ -81,32 +81,31 @@ changes_callback({stop, EndSeq}, _) ->
 changes_callback({change, {Change}, _}, _) ->
     DbName = couch_util:get_value(<<"id">>, Change),
     case DbName of <<"_design/", _/binary>> -> ok; _Else ->
-            DbDir = couch_config:get("couchdb","database_dir"),
-            case couch_util:get_value(deleted, Change, false) of
-                true ->
-                    ets:delete(partitions, DbName);
-                false ->
-                    case couch_util:get_value(doc, Change) of
-                        {error, Reason} ->
-                            ?LOG_ERROR("missing partition table for ~s: ~p",
-                                       [DbName, Reason]);
-                        {Doc} ->
-                            ets:delete(partitions, DbName),
-                            Shards = mem3_util:build_shards(DbName, Doc),
-                            ets:insert(partitions, Shards),
-                            %% check, if a shard exists before calling ensure to
-                            %% avoid opeing db
-                            lists:map(fun(#shard{name=ShardName}) ->
-                                              FileToCheck = DbDir ++ "/" ++ ?b2l(ShardName)
-                                                  ++ ".couch",
-                                              case file:read_file_info(FileToCheck) of
-                                                  {error, enoent} ->
-                                                      mem3_util:ensure_exists(ShardName);
-                                                  {ok, _} ->
-                                                      ok
-                                              end end,Shards)
+        case couch_util:get_value(deleted, Change, false) of
+        true ->
+            ets:delete(partitions, DbName);
+        false ->
+            case couch_util:get_value(doc, Change) of
+            {error, Reason} ->
+                ?LOG_ERROR("missing partition table for ~s: ~p", [DbName, Reason]);
+            {Doc} ->
+                ets:delete(partitions, DbName),
+                Shards = mem3_util:build_shards(DbName, Doc),
+                ets:insert(partitions, Shards),
+                %% check, if a shard exists before calling ensure to
+                %% avoid opeing db
+                DbDir = couch_config:get("couchdb","database_dir"),
+                lists:map(fun(#shard{name=ShardName}) ->
+                    FileToCheck = DbDir ++ "/" ++ ?b2l(ShardName) ++ ".couch",
+                    case file:read_file_info(FileToCheck) of
+                    {error, enoent} ->
+                        mem3_util:ensure_exists(ShardName);
+                    {ok, _} ->
+                        ok
                     end
+                end, Shards)
             end
+        end
     end,
     {ok, couch_util:get_value(<<"seq">>, Change)};
 changes_callback(timeout, _) ->

@@ -96,7 +96,6 @@ handle_info({'EXIT', Pid, _}, #state{update_notifier=Pid} = State) ->
     {noreply, State#state{update_notifier=NewPid}};
 
 handle_info({'EXIT', Active, normal}, State) ->
-    %%?LOG_INFO("normal exit of replications ~p ~n",[Active]),
     handle_replication_exit(State, Active);
 
 handle_info({'EXIT', Active, Reason}, State) ->
