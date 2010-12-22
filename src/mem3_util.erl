@@ -58,13 +58,15 @@ attach_nodes(Shards, Acc, [], UsedNodes) ->
 attach_nodes([S | Rest], Acc, [Node | Nodes], UsedNodes) ->
     attach_nodes(Rest, [S#shard{node=Node} | Acc], Nodes, [Node | UsedNodes]).
 
-open_db_doc(DbName) ->
-    {ok, Db} = couch_db:open(<<"dbs">>, []),
-    {ok, Doc} = couch_db:open_doc(Db, DbName, []),
+open_db_doc(DocId) ->
+    DbName = ?l2b(couch_config:get("mem3", "shard_db", "dbs")),
+    {ok, Db} = couch_db:open(DbName, []),
+    {ok, Doc} = couch_db:open_doc(Db, DocId, []),
     Doc.
 
 write_db_doc(Doc) ->
-    {ok, Db} = couch_db:open(<<"dbs">>, []),
+    DbName = ?l2b(couch_config:get("mem3", "shard_db", "dbs")),
+    {ok, Db} = couch_db:open(DbName, []),
     try
         update_db_doc(Db, Doc)
     catch conflict ->
@@ -84,7 +86,8 @@ update_db_doc(Db, #doc{id=Id, body=Body} = Doc) ->
     end.
 
 delete_db_doc(DocId) ->
-    {ok, Db} = couch_db:open(<<"dbs">>, []),
+    DbName = ?l2b(couch_config:get("mem3", "shard_db", "dbs")),
+    {ok, Db} = couch_db:open(DbName, []),
     try
         delete_db_doc(Db, DocId)
     catch conflict ->
@@ -141,9 +144,10 @@ n_val(N, _) when N < 1 ->
 n_val(N, _) ->
     N.
 
-load_shards_from_disk(DbName) when is_binary(DbName) ->
-    {ok, Db} = couch_db:open(<<"dbs">>, []),
-    try load_shards_from_db(Db, DbName) after couch_db:close(Db) end.
+load_shards_from_disk(DocId) when is_binary(DocId) ->
+    DbName = ?l2b(couch_config:get("mem3", "shard_db", "dbs")),
+    {ok, Db} = couch_db:open(DbName, []),
+    try load_shards_from_db(Db, DocId) after couch_db:close(Db) end.
 
 load_shards_from_db(#db{} = ShardDb, DbName) ->
     case couch_db:open_doc(ShardDb, DbName, []) of
