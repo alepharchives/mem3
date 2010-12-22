@@ -172,13 +172,11 @@ sync_nodes_and_dbs() ->
     Db2 = ?l2b(couch_config:get("mem3", "shard_db", "dbs")),
     Nodes = mem3:nodes(),
     Live = nodes(),
-    [[push(Db,N)
-      || Db <- [Db1,Db2]] || N <- Nodes, lists:member(N, Live)].
+    [[push(Db, N) || Db <- [Db1,Db2]] || N <- Nodes, lists:member(N, Live)].
 
 initial_sync() ->
     sync_nodes_and_dbs(),
-    Live = nodes(),
-    initial_sync(Live).
+    initial_sync(nodes()).
 
 initial_sync(Live) ->
     Self = node(),
@@ -207,8 +205,9 @@ start_update_notifier() ->
         Shards = mem3:shards(mem3:dbname(ShardName)),
         Targets = [S || #shard{node=N, name=Name} = S <- Shards, N =/= node(),
             Name =:= ShardName],
+        Live = nodes(),
         [?MODULE:push(ShardName,N) || #shard{node=N} <- Targets,
-            lists:member(N, nodes())];
+            lists:member(N, Live)];
     ({deleted, <<"shards/", _:18/binary, _/binary>> = ShardName}) ->
         gen_server:cast(?MODULE, {remove_shard, ShardName});
     (_) -> ok end).
