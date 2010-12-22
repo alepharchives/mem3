@@ -79,19 +79,17 @@ handle_cast({push, DbName, Node}, State) ->
         {noreply, State#state{active=[{DbName, Node, Pid}|L], count=C+1}}
     end;
 
-handle_cast({remove_node, Node}, State) ->
-    Waiting = [{S,N} || {S,N} <- State#state.waiting, N =/= Node],
-    Dict = lists:foldl(fun(DbName,D) -> dict:erase({DbName,Node}, D) end,
-        State#state.dict, [S || {S,N} <- State#state.waiting, N =:= Node]),
-    {noreply, State#state{dict = Dict, waiting = Waiting}};
+handle_cast({remove_node, Node}, #state{waiting = W0} = State) ->
+    {Alive, Dead} = lists:partition(fun({_,N}) -> N =/= Node end, W0),
+    Dict = remove_entries(State#state.dict, Dead),
+    [exit(Pid, die_now) || {_,N,Pid} <- State#state.active, N =:= Node],
+    {noreply, State#state{dict = Dict, waiting = Alive}};
 
-handle_cast({remove_shard, Shard}, State) ->
-    Waiting = [{S,N} || {S,N} <- State#state.waiting, S =/= Shard],
-    Dict = lists:foldl(fun(Entry,D) ->
-                               dict:erase(Entry, D) end,
-        State#state.dict, [{S,N} || {S,N} <- State#state.waiting, S =:= Shard]),
-    [exit(Pid, shutdown) || {S,_,Pid} <- State#state.active, S =:= Shard],
-    {noreply, State#state{dict = Dict, waiting = Waiting}}.
+handle_cast({remove_shard, Shard}, #state{waiting = W0} = State) ->
+    {Alive, Dead} = lists:partition(fun({S,_}) -> S =/= Shard end, W0),
+    Dict = remove_entries(State#state.dict, Dead),
+    [exit(Pid, die_now) || {S,_,Pid} <- State#state.active, S =:= Shard],
+    {noreply, State#state{dict = Dict, waiting = Alive}}.
 
 handle_info({'EXIT', Pid, _}, #state{update_notifier=Pid} = State) ->
     {ok, NewPid} = start_update_notifier(),
@@ -231,3 +229,6 @@ next_replication(Active, Waiting) ->
 
 is_running(DbName, Node, ActiveList) ->
     [] =/= [true || {S,N,_} <- ActiveList, S=:=DbName, N=:=Node].
+
+remove_entries(Dict, Entries) ->
+    lists:foldl(fun(Entry, D) -> dict:erase(Entry, D) end, Dict, Entries).
