@@ -41,10 +41,12 @@ get_active() ->
 get_queue() ->
     gen_server:call(?MODULE, get_queue).
 
-push(Db, Node) ->
-    gen_server:cast(?MODULE,
-                    {push, #shard{name=Db,node=node()},
-                     #shard{name=Db,node=Node}}).
+push(#shard{name = Name}, Target) ->
+    push(Name, Target);
+push(Name, #shard{node=Node}) ->
+    push(Name, Node);
+push(Name, Node) ->
+    gen_server:cast(?MODULE, {push, Name, Node}).
 
 remove_node(Node) ->
     gen_server:cast(?MODULE, {remove_node, Node}).
@@ -154,11 +156,8 @@ handle_replication_exit(State, Pid) ->
     end,
     {noreply, NewState}.
 
-%% replication of shards
-start_push_replication(#shard{} = Shard,
-                       #shard{} = TargetShard) ->
-    spawn_link(fun() ->
-             mem3_rep:go(Shard,TargetShard) end).
+start_push_replication(Name, Node) ->
+    spawn_link(mem3_rep, go, [Name, Node]).
 
 add_to_queue(State, DbName, Node) ->
     #state{dict=D, waiting=Waiting} = State,
