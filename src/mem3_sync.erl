@@ -98,23 +98,20 @@ handle_info({'EXIT', Pid, _}, #state{update_notifier=Pid} = State) ->
 handle_info({'EXIT', Active, normal}, State) ->
     handle_replication_exit(State, Active);
 
+handle_info({'EXIT', Active, die_now}, State) ->
+    % we forced this one ourselves, do not retry
+    handle_replication_exit(State, Active);
+
+handle_info({'EXIT', Active, {{not_found, no_db_file}, _Stack}}, State) ->
+    % target doesn't exist, do not retry
+    handle_replication_exit(State, Active);
+
 handle_info({'EXIT', Active, Reason}, State) ->
     case lists:keyfind(Active, 3, State#state.active) of
     {OldDbName, OldNode, _} ->
         ?LOG_ERROR("~p replication ~p -> ~p died:~n~p", [?MODULE, OldDbName,
             OldNode, Reason]),
-            if is_tuple(Reason) ->
-                    case element(1,Reason) of
-                        {not_found, no_db_file} -> ok;
-                        _Else ->
-                            #shard{name=Db} = OldDbName,
-                            #shard{node=Node} = OldNode,
-                            timer:apply_after(5000, ?MODULE, push, [Db, Node])
-                    end;
-               true ->
-                    %% shutdown or killed no retry
-                    ok
-            end;
+        timer:apply_after(5000, ?MODULE, push, [OldDbName, OldNode]);
     false -> ok end,
     handle_replication_exit(State, Active);
 
